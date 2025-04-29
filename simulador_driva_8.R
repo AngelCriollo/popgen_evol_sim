@@ -3,7 +3,7 @@
 #               SIMULADOR DE DERIVA
 #               Autor: Angel Criollo Rayo
 #               Version 8: 26 - Marzo - 2025, Asistido por DeepSeek.
-#               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
+#               Grupo: Citogenetica, Filogenia y Evolucion de Poblaciones
 #               Doctorado en Ciencias Biomedicas
 #               Asignatura: Genetica Poblacional y Evolutiva (electiva)
 #
