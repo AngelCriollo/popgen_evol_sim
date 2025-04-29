@@ -1,3 +1,20 @@
+################################################################################
+#
+#               SIMULADOR DE DERIVA 
+#               Autor: Angel Criollo Rayo & ChatGPT
+#               Version 7: 28 - Abril - 2025
+#               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
+#               Doctorado en Ciencias Biomedicas
+#               Asignatura: Genetica Poblacional y Evolutiva (electiva)
+#
+################################################################################
+#
+# Este script esta diseñado para analizar los efectos del tamaño poblacional
+# en las frecuencias alelicas a lo largo de multiples generaciones. 
+# en varios marcadores a la vez, sin tener en cuenta SN, mutación, ligamiento o endogamia
+# las piscinas gaméticas se generan por sexo 
+################################################################################
+
 # Load libraries
 library(tidyverse)
 
@@ -7,7 +24,7 @@ n_populations <- 3
 n_individuals <- 50
 n_snps <- 5
 n_generations <- 20
-initial_freqs <- rep(0.5, n_snps)# runif(n_snps, 0.3, 0.7) 
+initial_freqs <- rep(0.5, n_snps) # runif(n_snps, 0.3, 0.7) generador frecuencias aleatorias 
 nucleotides <- c("A", "C", "G", "T")
 
 # Generate SNP markers: random allele pairs
@@ -166,6 +183,8 @@ genotype_history_df <- bind_rows(genotype_history)
 genotype_counts_df <- bind_rows(genotype_counts)
 
 ################################################################################
+# RESULTADOS
+                             
 # Allele frequency dynamics
 ggplot(genotype_counts_df, aes(x=Generation, y=Frequency, color=Population)) +
   geom_line() +
@@ -190,17 +209,4 @@ ggplot(genotype_counts_df, aes(x=Generation, y=HWE_pvalue, color=Population)) +
   geom_hline(yintercept=0.05, linetype="dashed", color="red") +
   theme_minimal() +
   ggtitle("P-values of HWE Chi-square tests")
-
-
-
-
-
-
-
-
-
-
-
-
-
 
