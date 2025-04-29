@@ -1,9 +1,9 @@
 ################################################################################
 #
 #               SIMULADOR DE DERIVA 
-#               Autor: Angel Criollo Rayo & ChatGPT
-#               Version 7: 28 - Abril - 2025
-#               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
+#               Autor: Angel Criollo Rayo
+#               Version 7: 28 - Abril - 2025, Asistido por ChatGPT
+#               Grupo: Citogenetica, Filogenia y Evolucion de Poblaciones
 #               Doctorado en Ciencias Biomedicas
 #               Asignatura: Genetica Poblacional y Evolutiva (electiva)
 #
