@@ -1,4 +1,20 @@
-# chat gpt con shyni y mejoras: autofecundacion o cruzada
+################################################################################
+#
+#               APP SIMULADOR PERDIDA HETEROCIGOSIS EN UNA POBLACION
+#               Autor: Angel Criollo Rayo 
+#               Version 7: 01 - Mayo - 2025, asistido por ChatGPT
+#               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
+#               Doctorado en Ciencias Biomedicas
+#               Asignatura: Genetica Poblacional y Evolutiva (electiva)
+#
+################################################################################
+#
+# Este script esta diseñado para analizar los efectos de la deriva en la perdida
+# de la heterocigosidad a lo largo de varias generaciones en una poblacion.
+# Simula uniones o apareamientos por autofecundacion en distintos grados o
+# fecundación cruzada.
+# Se puede variar la frecuencia inicial de los genotipos y grados de "selfing"
+################################################################################
 
 library(shiny)
 library(ggplot2)
