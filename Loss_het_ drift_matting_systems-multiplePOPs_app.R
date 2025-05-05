@@ -1,8 +1,8 @@
 ################################################################################
 #
 #               SIMULADOR PERDIDA HETEROCIGOSIS  
-#               Autor: Angel Criollo Rayo & ChatGPT
-#               Version 7: 01 - Mayo - 2025
+#               Autor: Angel Criollo Rayo
+#               Version 7: 01 - Mayo - 2025, asistido por ChatGPT
 #               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
 #               Doctorado en Ciencias Biomedicas
 #               Asignatura: Genetica Poblacional y Evolutiva (electiva)
