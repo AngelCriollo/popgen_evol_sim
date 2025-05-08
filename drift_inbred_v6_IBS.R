@@ -1,6 +1,6 @@
 ################################################################################
 #
-#               APP TRANSMISION MENDELIANA
+#               APP TRANSMISION MENDELIANA Y ENDOGAMIA
 #               Autor: Angel Criollo Rayo 
 #               Version 6: 07 - Mayo - 2025, asistido por ChatGPT
 #               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
@@ -9,11 +9,11 @@
 #
 ################################################################################
 #
-# Este script esta diseñado para analizar los efectos de la deriva en la perdida
-# de la heterocigosidad a lo largo de varias generaciones en una poblacion.
-# Simula uniones o apareamientos por autofecundacion en distintos grados o
+# Este script esta diseñado para analizar la transmisión mendeliana de genes a lo
+# largo de varias generaciones en una poblacion, bajo diferentes contextos de endo-
+# gamia o apareamientos por autofecundacion en distintos grados o
 # fecundación cruzada.
-# Se puede variar la frecuencia inicial de los genotipos y grados de "selfing"
+# Se puede variar la frecuencia inicial de los genotipos y grados de "selfing".
 ################################################################################
 library(shiny)
 library(DT)
