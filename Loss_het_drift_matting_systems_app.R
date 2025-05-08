@@ -1,200 +1,235 @@
 ################################################################################
 #
-#               APP SIMULADOR PERDIDA HETEROCIGOSIS EN UNA POBLACION
+#               APP SIMULADOR MENDELIANO: DISTRIBUCION INDEPENDIENTE
 #               Autor: Angel Criollo Rayo 
-#               Version 7: 01 - Mayo - 2025, asistido por ChatGPT
+#               Version 2: 01 - Mayo - 2025, asistido por ChatGPT
 #               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
 #               Doctorado en Ciencias Biomedicas
 #               Asignatura: Genetica Poblacional y Evolutiva (electiva)
 #
 ################################################################################
 #
-# Este script esta diseñado para analizar los efectos de la deriva en la perdida
-# de la heterocigosidad a lo largo de varias generaciones en una poblacion.
+# Este script esta diseñado para simular la distribución independiente
 # Simula uniones o apareamientos por autofecundacion en distintos grados o
 # fecundación cruzada.
-# Se puede variar la frecuencia inicial de los genotipos y grados de "selfing"
+# Se puede modular: la frecuencia inicial de los genotipos, grados de "selfing"
+# numero de individuos/generacion, numero de generaciones, numero de genes.
 ################################################################################
 
 library(shiny)
-library(ggplot2)
 library(dplyr)
+library(digest)
+library(ggplot2)
 library(tidyr)
 
-# --- Helper Function for Mendelian Inheritance ---
-sample_gamete <- function(allele1, allele2) {
-  sample(c(allele1, allele2), size = 1)
+# Define full gene pool
+default_gene_pool <- LETTERS[1:10]
+
+allele_colors <- setNames(lapply(default_gene_pool, function(g) {
+  c(setNames(paste0("#", substr(digest::digest(g), 1, 6)), g),
+    setNames(paste0("#", substr(digest::digest(tolower(g)), 1, 6)), tolower(g)))
+}), default_gene_pool)
+
+parse_genotype_string <- function(genostr, genes) {
+  alleles <- strsplit(gsub("\\s", "", genostr), "")[[1]]
+  if (length(alleles) != length(genes) * 2) return(NULL)
+  setNames(lapply(seq(1, length(alleles), by = 2), function(i) alleles[i:(i+1)]), genes)
 }
 
-# --- Core Simulation Function ---
-simulate_population <- function(n_ind, n_gen,
-                                initial_proportions = c(het = 1, homAA = 0, homBB = 0),
-                                selfing_rate = 0.0) {
-  pop <- vector("list", n_gen)
+phenotype <- function(geno) {
+  sapply(names(geno), function(g) {
+    if (any(grepl("[A-Z]", geno[[g]]))) paste0(g, "_") else paste0(tolower(g), tolower(g))
+  }) %>% paste0(collapse = "")
+}
+
+sample_parents <- function(geno_strs, props, genes, sex, count, id_start) {
+  genos <- strsplit(geno_strs, ",")[[1]]
+  genos <- trimws(genos)
+  props <- as.numeric(strsplit(props, ",")[[1]])
   
-  if (sum(initial_proportions) != 1) stop("initial_proportions must sum to 1")
-  if (selfing_rate < 0 || selfing_rate > 1) stop("selfing_rate must be between 0 and 1")
+  if (length(genos) != length(props) || sum(props) <= 0 || any(is.na(props))) return(NULL)
+  props <- props / sum(props)
   
-  types <- sample(c("het", "homAA", "homBB"), n_ind, replace = TRUE, prob = initial_proportions)
-  allele1 <- allele2 <- character(n_ind)
-  allele1[types == "het"] <- "A"; allele2[types == "het"] <- "B"
-  allele1[types == "homAA"] <- "A"; allele2[types == "homAA"] <- "A"
-  allele1[types == "homBB"] <- "B"; allele2[types == "homBB"] <- "B"
-  
-  pop[[1]] <- data.frame(id = 1:n_ind, allele1, allele2, parent1 = NA, parent2 = NA)
-  
-  for (g in 2:n_gen) {
-    parent1 <- parent2 <- integer(n_ind)
+  sampled <- sample(genos, size = count, replace = TRUE, prob = props)
+  ids <- seq(id_start, id_start + count - 1)
+  lapply(seq_along(sampled), function(i) {
+    geno <- parse_genotype_string(sampled[i], genes)
+    list(
+      id = ids[i],
+      sex = sex,
+      generation = 0,
+      genotype = geno,
+      phenotype = phenotype(geno),
+      parents = NA
+    )
+  })
+}
+
+make_generation <- function(prev_gen, gen_num, selfing_ratio, n, id_start, genes) {
+  offspring <- list()
+  for (i in 1:n) {
+    sex <- sample(c("M", "F"), 1)
+    is_self <- runif(1) < selfing_ratio || length(prev_gen) == 0
     
-    for (i in 1:n_ind) {
-      if (runif(1) < selfing_rate) {
-        p <- sample(1:n_ind, 1)
-        parent1[i] <- p; parent2[i] <- p
-      } else {
-        parent1[i] <- sample(1:n_ind, 1)
-        parent2[i] <- sample(1:n_ind, 1)
-      }
+    if (is_self) {
+      parent <- sample(prev_gen, 1)[[1]]
+      geno <- lapply(parent$genotype, function(a) sample(a, 2, replace = TRUE))
+      parents <- rep(parent$id, 2)
+    } else {
+      mom <- sample(Filter(function(p) p$sex == "F", prev_gen), 1)[[1]]
+      dad <- sample(Filter(function(p) p$sex == "M", prev_gen), 1)[[1]]
+      geno <- mapply(
+        function(m, d) c(sample(m, 1), sample(d, 1)),
+        mom$genotype, dad$genotype, SIMPLIFY = FALSE
+      )
+      parents <- c(mom$id, dad$id)
     }
     
-    allele1 <- mapply(function(p) {
-      sample_gamete(pop[[g - 1]]$allele1[p], pop[[g - 1]]$allele2[p])
-    }, parent1)
-    
-    allele2 <- mapply(function(p) {
-      sample_gamete(pop[[g - 1]]$allele1[p], pop[[g - 1]]$allele2[p])
-    }, parent2)
-    
-    pop[[g]] <- data.frame(id = 1:n_ind, allele1, allele2, parent1, parent2)
-  }
-  
-  return(pop)
-}
-
-get_plot_data <- function(pop) {
-  do.call(rbind, lapply(seq_along(pop), function(g) {
-    df <- pop[[g]]
-    data.frame(
-      gen = g,
-      id = df$id,
-      allele1 = df$allele1,
-      allele2 = df$allele2,
-      parent1 = df$parent1,
-      parent2 = df$parent2
+    offspring[[i]] <- list(
+      id = id_start + i,
+      sex = sex,
+      generation = gen_num,
+      genotype = geno,
+      phenotype = phenotype(geno),
+      parents = parents
     )
-  }))
+  }
+  offspring
 }
 
-get_connection_data <- function(plot_data) {
-  plot_data %>%
-    filter(gen > 1) %>%
-    mutate(
-      x = id, y = -gen,
-      x_parent1 = parent1, y_parent1 = -(gen - 1),
-      x_parent2 = parent2, y_parent2 = -(gen - 1)
-    ) %>%
-    tidyr::pivot_longer(cols = c(x_parent1, x_parent2), names_to = "ptype", values_to = "x_parent") %>%
-    mutate(y_parent = ifelse(ptype == "x_parent1", y_parent1, y_parent2)) %>%
-    select(x, y, x_parent, y_parent)
-}
-
-get_allele_freqs <- function(pop) {
-  do.call(rbind, lapply(seq_along(pop), function(g) {
-    alleles <- unlist(pop[[g]][, c("allele1", "allele2")])
-    freq_A <- mean(alleles == "A")
-    data.frame(generation = g, A = freq_A, B = 1 - freq_A)
-  }))
-}
-
-get_heterozygosity <- function(pop) {
-  do.call(rbind, lapply(seq_along(pop), function(g) {
-    df <- pop[[g]]
-    het <- mean(df$allele1 != df$allele2)
-    data.frame(generation = g, heterozygosity = het)
-  }))
-}
-
-# --- UI ---
 ui <- fluidPage(
-  titlePanel("Genetic Drift Simulator"),
+  titlePanel("Mendelian Simulation (Configurable Genotypes, Validation, ggplot)"),
   sidebarLayout(
     sidebarPanel(
-      sliderInput("n_ind", "Individuals", min = 5, max = 100, value = 20),
-      sliderInput("n_gen", "Generations", min = 5, max = 50, value = 15),
-      sliderInput("selfing", "Selfing Rate", min = 0, max = 1, value = 0.5, step = 0.05),
-      numericInput("prop_het", "Proportion Heterozygous", value = 0.5, min = 0, max = 1),
-      numericInput("prop_homAA", "Proportion AA", value = 0.25, min = 0, max = 1),
-      numericInput("prop_homBB", "Proportion BB", value = 0.25, min = 0, max = 1),
-      actionButton("run", "Run Simulation")
+      numericInput("n_gen", "Generations (excluding parents):", 3, min = 1),
+      numericInput("n_ind", "Individuals per generation:", 20, min = 2),
+      sliderInput("selfing", "Selfing ratio:", 0, 1, 0, step = 0.1),
+      numericInput("n_genes", "Number of genes:", 5, min = 1, max = 10),
+      textInput("male_genos", "Male genotypes (comma-separated):", "AaBbCcDdEe"),
+      textInput("male_props", "Male proportions:", "1.0"),
+      textInput("female_genos", "Female genotypes (comma-separated):", "AaBbCcDdEe"),
+      textInput("female_props", "Female proportions:", "1.0"),
+      actionButton("simulate", "Run Simulation"),
+      textOutput("validation")
     ),
     mainPanel(
-      tabsetPanel(
-        tabPanel("Genotype Grid", plotOutput("genotype_plot", height = "600px")),
-        tabPanel("Allele Frequencies", plotOutput("freq_plot")),
-        tabPanel("Heterozygosity", plotOutput("het_plot"))
-      )
+      plotOutput("plot", height = "800px"),
+      verbatimTextOutput("summary")
     )
   )
 )
 
-# --- Server ---
 server <- function(input, output) {
-  sim_data <- eventReactive(input$run, {
-    props <- c(het = input$prop_het, homAA = input$prop_homAA, homBB = input$prop_homBB)
-    sim <- simulate_population(input$n_ind, input$n_gen, props, selfing_rate = input$selfing)
-    list(
-      pop = sim,
-      plot_data = get_plot_data(sim),
-      conn_data = get_connection_data(get_plot_data(sim)),
-      freq_data = get_allele_freqs(sim),
-      het_data = get_heterozygosity(sim)
-    )
+  output$validation <- renderText({
+    genes <- default_gene_pool[1:input$n_genes]
+    m <- strsplit(input$male_genos, ",")[[1]]
+    f <- strsplit(input$female_genos, ",")[[1]]
+    len_check <- all(nchar(trimws(c(m, f))) == input$n_genes * 2)
+    if (!len_check) return("❌ Each genotype must have 2 alleles per gene.")
+    
+    mp <- as.numeric(strsplit(input$male_props, ",")[[1]])
+    fp <- as.numeric(strsplit(input$female_props, ",")[[1]])
+    if (length(mp) != length(m) || length(fp) != length(f)) return("❌ Mismatched number of genotypes and proportions.")
+    if (abs(sum(mp) - 1) > 1e-6 || abs(sum(fp) - 1) > 1e-6) return("❌ Proportions must sum to 1.")
+    "✅ Input valid."
   })
   
-  output$genotype_plot <- renderPlot({
-    req(sim_data())
-    dat <- sim_data()$plot_data
-    conn <- sim_data()$conn_data
+  sim <- eventReactive(input$simulate, {
+    genes <- default_gene_pool[1:input$n_genes]
+    id_counter <- 1
     
-    dat <- dat %>%
+    males <- sample_parents(input$male_genos, input$male_props, genes, "M", 5, id_counter)
+    id_counter <- id_counter + 5
+    females <- sample_parents(input$female_genos, input$female_props, genes, "F", 5, id_counter)
+    id_counter <- id_counter + 5
+    
+    if (is.null(males) || is.null(females)) return(NULL)
+    
+    parents <- c(males, females)
+    all_inds <- parents
+    prev <- parents
+    
+    for (g in 1:input$n_gen) {
+      next_gen <- make_generation(prev, g, input$selfing, input$n_ind, id_counter, genes)
+      all_inds <- c(all_inds, next_gen)
+      prev <- next_gen
+      id_counter <- id_counter + input$n_ind
+    }
+    list(individuals = all_inds, genes = genes)
+  })
+  
+  output$summary <- renderPrint({
+    res <- sim()
+    if (is.null(res)) return("Invalid input.")
+    inds <- res$individuals
+    gens <- split(inds, sapply(inds, function(i) i$generation))
+    for (g in names(gens)) {
+      cat(paste("Generation", g, "-", length(gens[[g]]), "individuals\n"))
+      tab <- table(sapply(gens[[g]], function(i) i$phenotype))
+      print(tab)
+      cat("\n")
+    }
+  })
+  
+  output$plot <- renderPlot({
+    res <- sim()
+    if (is.null(res)) return(NULL)
+    inds <- res$individuals
+    genes <- res$genes
+    
+    positions <- data.frame(
+      id = sapply(inds, `[[`, "id"),
+      generation = sapply(inds, `[[`, "generation"),
+      sex = sapply(inds, `[[`, "sex")
+    ) %>%
+      group_by(generation) %>%
+      mutate(ind_index = row_number()) %>%
+      ungroup()
+    
+    df <- do.call(rbind, lapply(inds, function(ind) {
+      data.frame(
+        id = ind$id,
+        generation = ind$generation,
+        sex = ind$sex,
+        gene = rep(genes, each = 2),
+        allele = unlist(ind$genotype),
+        allele_num = rep(1:2, times = length(genes)),
+        parents = paste(ind$parents, collapse = ",")
+      )
+    })) %>%
+      left_join(positions, by = c("id", "generation", "sex")) %>%
       mutate(
-        x = id, y = -gen,
-        a1_x = id - 0.2, a2_x = id + 0.2,
-        a1_col = ifelse(allele1 == "A", "blue", "red"),
-        a2_col = ifelse(allele2 == "A", "blue", "red")
+        x = ind_index,
+        y = -generation * 3 + as.numeric(factor(gene)) * 0.4 + (allele_num - 1) * 0.1,
+        shape = ifelse(sex == "M", 22, 21),
+        fill = mapply(function(g, a) allele_colors[[g]][[a]], gene, allele)
       )
     
-    ggplot() +
-      geom_segment(data = conn, aes(x = x_parent, y = y_parent, xend = x, yend = y),
-                   color = "gray70", linewidth = 0.4) +
-      geom_point(data = dat, aes(x = a1_x, y = y, color = a1_col), size = 3) +
-      geom_point(data = dat, aes(x = a2_x, y = y, color = a2_col), size = 3) +
-      scale_color_identity() +
-      labs(title = "Genotype Grid", x = "Individual", y = "Generation") +
-      theme_minimal()
-  })
-  
-  output$freq_plot <- renderPlot({
-    req(sim_data())
-    df <- sim_data()$freq_data %>%
-      pivot_longer(cols = c("A", "B"), names_to = "allele", values_to = "freq")
+    parent_edges <- do.call(rbind, lapply(inds, function(ind) {
+      if (!is.null(ind$parents) && all(!is.na(ind$parents))) {
+        child_row <- positions[positions$id == ind$id, ]
+        p1_row <- positions[positions$id == ind$parents[1], ]
+        p2_row <- positions[positions$id == ind$parents[2], ]
+        rbind(
+          data.frame(x = p1_row$ind_index, xend = child_row$ind_index,
+                     y = -p1_row$generation * 3, yend = -child_row$generation * 3),
+          data.frame(x = p2_row$ind_index, xend = child_row$ind_index,
+                     y = -p2_row$generation * 3, yend = -child_row$generation * 3)
+        )
+      }
+    }))
     
-    ggplot(df, aes(x = generation, y = freq, color = allele)) +
-      geom_line(size = 1.2) +
-      scale_color_manual(values = c("A" = "blue", "B" = "red")) +
-      labs(title = "Allele Frequencies Over Time", y = "Frequency") +
-      theme_minimal()
+    ggplot(df, aes(x = x, y = y)) +
+      geom_segment(data = parent_edges, aes(x = x, xend = xend, y = y, yend = yend), inherit.aes = FALSE,
+                   color = "gray60", linetype = "dashed", linewidth = 0.4) +
+      geom_point(aes(fill = fill, shape = sex), size = 4, stroke = 0.7, color = "black") +
+      scale_shape_manual(values = c("M" = 22, "F" = 21)) +
+      scale_fill_identity() +
+      theme_minimal() +
+      labs(title = "Mendelian Simulation: Genotype Visualization with Ancestry",
+           x = "Individuals", y = "Generation (stacked genes)") +
+      theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
   })
-  
-  output$het_plot <- renderPlot({
-    req(sim_data())
-    df <- sim_data()$het_data
-    
-    ggplot(df, aes(x = generation, y = heterozygosity)) +
-      geom_line(color = "darkgreen", size = 1.2) +
-      labs(title = "Heterozygosity Over Time", y = "Proportion Heterozygous") +
-      theme_minimal()
-  })
-  
 }
 
 shinyApp(ui = ui, server = server)
