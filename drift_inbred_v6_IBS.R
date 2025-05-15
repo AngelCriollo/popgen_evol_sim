@@ -3,7 +3,7 @@
 #               APP TRANSMISION MENDELIANA Y ENDOGAMIA
 #               Autor: Angel Criollo Rayo 
 #               Version 6: 07 - Mayo - 2025, asistido por ChatGPT
-#               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
+#               Grupo: Citogenetica, Filogenia y Evolucion de Poblaciones
 #               Doctorado en Ciencias Biomedicas
 #               Asignatura: Genetica Poblacional y Evolutiva (electiva)
 #
