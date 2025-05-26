@@ -2,7 +2,7 @@
 #
 #               SIMULADOR DE DERIVA Y MUTACION
 #               Autor: Angel Criollo Rayo
-#               Version 7: 23 - mayo - 2025
+#               Version 2: 23 - mayo - 2025
 #               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
 #               Doctorado en Ciencias Biomedicas
 #               Asignatura: Genetica Poblacional y Evolutiva (electiva)
