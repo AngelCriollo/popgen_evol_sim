@@ -2,7 +2,7 @@
 #
 #               DERIVA Y MUTACION: ALELOS MULTIPLES
 #               Autor: Angel Criollo Rayo & DeepSeek
-#               Version 2: 24 - Mayo - 2025
+#               Version 8: 24 - Mayo - 2025
 #               Grupo: Citogenetica, Filogenia y Evlucion de Poblaciones
 #               Doctorado en Ciencias Biomedicas
 #               Asignatura: Genetica Poblacional y Evolutiva (electiva)
