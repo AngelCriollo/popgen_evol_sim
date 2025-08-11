@@ -1,0 +1,984 @@
+library(shiny)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(purrr)
+library(mathjaxr)
+library(reshape2)
+library(RColorBrewer)
+library(pegas)
+library(adegenet)
+
+# Define UI
+ui <- fluidPage(
+  titlePanel("Evolutionary Simulator with Weir-Cockerham Fst and AMOVA"),
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("num_pops", "Number of Populations", value = 2, min = 1, max = 10),
+      
+      # Original population size input (kept for backward compatibility)
+      numericInput("pop_size", "Default Population Size", value = 20, min = 5, max = 100),
+      
+      # New input for variable population sizes
+      textInput("pop_sizes_over_time", "Population Sizes Over Generations", 
+                value = "20; 20",
+                placeholder = "Comma separated per population, semicolon between pops. E.g., '20,10,20; 20,20,20'"),
+      helpText("Format: sizes for each generation (comma separated) for each population (semicolon separated). First value is initial size."),
+      
+      numericInput("num_gens", "Number of Generations", value = 10, min = 2, max = 50),
+      
+      textInput("init_freqs", "Initial A1 Frequencies (comma separated)", value = "0.5, 0.5"),
+      
+      # Mutation rates
+      numericInput("mutation_A1_to_A2", "μ (A1→A2)", value = 0.001, min = 0, max = 0.1, step = 0.001),
+      numericInput("mutation_A2_to_A1", "μ (A2→A1)", value = 0.001, min = 0, max = 0.1, step = 0.001),
+      
+      # Point size control
+      sliderInput("point_size", "Point Size in Plots", 
+                  min = 1, max = 10, value = 3, step = 0.5),
+      
+      selectInput("selection_model", "Selection Model",
+                  choices = c("Neutral", "Directional", "Heterozygote Advantage", "Homozygote Advantage")),
+      
+      conditionalPanel(
+        condition = "input.selection_model == 'Directional'",
+        numericInput("w11", "Fitness (A1A1)", value = 1.1, min = 0, max = 2, step = 0.01),
+        numericInput("w12", "Fitness (A1A2)", value = 1.05, min = 0, max = 2, step = 0.01),
+        numericInput("w22", "Fitness (A2A2)", value = 1.0, min = 0, max = 2, step = 0.01)
+      ),
+      conditionalPanel(
+        condition = "input.selection_model == 'Heterozygote Advantage'",
+        numericInput("w11_het", "Fitness (A1A1)", value = 0.9, min = 0, max = 2, step = 0.01),
+        numericInput("w12_het", "Fitness (A1A2)", value = 1.0, min = 0, max = 2, step = 0.01),
+        numericInput("w22_het", "Fitness (A2A2)", value = 0.9, min = 0, max = 2, step = 0.01)
+      ),
+      conditionalPanel(
+        condition = "input.selection_model == 'Homozygote Advantage'",
+        numericInput("w11_hom", "Fitness (A1A1)", value = 1.1, min = 0, max = 2, step = 0.01),
+        numericInput("w12_hom", "Fitness (A1A2)", value = 1.0, min = 0, max = 2, step = 0.01),
+        numericInput("w22_hom", "Fitness (A2A2)", value = 1.1, min = 0, max = 2, step = 0.01)
+      ),
+      
+      selectInput("migration_model", "Migration Model",
+                  choices = c("None", "Island", "Stepping Stone")),
+      conditionalPanel(
+        condition = "input.migration_model != 'None'",
+        numericInput("migration_rate", "Migration Rate", value = 0.05, min = 0, max = 0.5, step = 0.01)
+      ),
+      
+      actionButton("run_sim", "Run Simulation")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Genotype Visualization", 
+                 div(style = "overflow-y: auto; max-height: 800px;",
+                     uiOutput("genotype_plots_ui")
+                 )
+        ),
+        
+        tabPanel("Allele Dynamics",
+                 plotOutput("allele_freq_plot"),
+                 h4("Allele Frequency Summary Statistics"),
+                 fluidRow(
+                   column(6, tableOutput("freq_summary_table")),
+                   column(6, plotOutput("freq_boxplot", height = "400px"))
+                 ),
+                 plotOutput("heterozygosity_plot"),
+                 plotOutput("pop_size_plot")
+        ),
+        
+        tabPanel("Fst Analysis",
+                 conditionalPanel(
+                   condition = "input.num_pops >= 2",
+                   h3("Pairwise Fst Values (Weir-Cockerham)"),
+                   tableOutput("fst_table"),
+                   h3("Average Fst Across Populations"),
+                   verbatimTextOutput("avg_fst"),
+                   h3("Fst Heatmap"),
+                   plotOutput("fst_heatmap"),
+                   h3("Fst Dynamics Across Generations"),
+                   plotOutput("fst_dynamics_plot")
+                 ),
+                 conditionalPanel(
+                   condition = "input.num_pops < 2",
+                   p("Fst analysis requires at least 2 populations.")
+                 )
+        ),
+        tabPanel("AMOVA Analysis",
+                 conditionalPanel(
+                   condition = "input.num_pops >= 2",
+                   h3("Hierarchical Grouping for AMOVA"),
+                   textInput("amova_groups", "Group Membership (comma separated)", 
+                             value = "1,1", 
+                             placeholder = "E.g., '1,1,2,2' for 4 populations in 2 groups"),
+                   helpText("Assign each population to a group (1, 2, etc.) for hierarchical analysis"),
+                   
+                   actionButton("run_amova", "Run AMOVA Analysis"),
+                   
+                   h3("AMOVA Results"),
+                   verbatimTextOutput("amova_summary"),
+                   
+                   h3("Variance Components"),
+                   plotOutput("amova_plot"),
+                   
+                   h3("Pairwise Phi Statistics"),
+                   tableOutput("amova_phi_table"),
+                   
+                   h3("Phi Statistics Heatmap"),
+                   plotOutput("phi_heatmap",height = "600px")
+                 ),
+                 conditionalPanel(
+                   condition = "input.num_pops < 2",
+                   p("AMOVA analysis requires at least 2 populations.")
+                 )
+        ),
+        tabPanel("Formulas",
+                 withMathJax(
+                   uiOutput("formulas")
+                 )
+        )
+      )
+    )
+  )
+)
+
+# Weir-Cockerham Fst estimation (simplified for biallelic loci)
+calculate_weir_cockerham_fst <- function(genotypes) {
+  # Convert genotypes to counts of A1 allele (0,1,2)
+  geno_counts <- genotypes$a1 + genotypes$a2
+  
+  # Number of populations
+  n_pops <- length(unique(genotypes$pop))
+  pop_sizes <- table(genotypes$pop)
+  
+  # Overall mean
+  p_total <- mean(geno_counts)/2
+  
+  # Population means
+  pop_means <- tapply(geno_counts/2, genotypes$pop, mean)
+  
+  # Components of variance
+  n_c <- (sum(pop_sizes) - sum(pop_sizes^2)/sum(pop_sizes)) / (n_pops - 1)
+  MSG <- mean(tapply(geno_counts, genotypes$pop, function(x) 2*mean(x/2)*(1-mean(x/2))))
+  MSP <- (2 * sum(pop_sizes * (pop_means - p_total)^2)) / (n_pops - 1)
+  
+  # Fst components
+  sigmasq_a <- (MSP - MSG) / (2 * n_c)
+  sigmasq_b <- MSG / 2
+  
+  # Fst estimate
+  fst <- sigmasq_a / (sigmasq_a + sigmasq_b)
+  
+  return(max(0, min(fst, 1)))  # Bound between 0 and 1
+}
+
+# Pairwise Weir-Cockerham Fst
+calculate_pairwise_wc_fst <- function(genotypes, pop1, pop2) {
+  sub_geno <- genotypes[genotypes$pop %in% c(pop1, pop2),]
+  return(calculate_weir_cockerham_fst(sub_geno))
+}
+
+# Function to calculate AMOVA
+calculate_amova <- function(genotypes, groups) {
+  # Validate inputs
+  if (is.null(genotypes)) return(NULL)
+  if (nrow(genotypes) < 2) return(NULL)
+  if (length(unique(genotypes$pop)) < 2) return(NULL)
+  
+  # Create data frame with proper structure
+  df <- data.frame(
+    pop = as.factor(genotypes$pop),
+    group = as.factor(groups[as.numeric(genotypes$pop)]),  # Ensure proper group indexing
+    a1 = genotypes$a1,
+    a2 = genotypes$a2,
+    stringsAsFactors = TRUE
+  )
+  
+  # Calculate allele frequencies for each individual (0, 0.5, or 1)
+  df$allele_freq <- (df$a1 + df$a2) / 2
+  
+  # Check if we have valid grouping
+  if (length(unique(df$group)) < 2) {
+    message("AMOVA requires at least 2 groups")
+    return(NULL)
+  }
+  
+  # Calculate variance components using linear models
+  # Total sum of squares
+  total_mean <- mean(df$allele_freq)
+  SS_total <- sum((df$allele_freq - total_mean)^2)
+  
+  # Among groups sum of squares
+  group_means <- tapply(df$allele_freq, df$group, mean)
+  n_per_group <- table(df$group)
+  SS_groups <- sum(n_per_group * (group_means - total_mean)^2)
+  
+  # Among populations within groups sum of squares
+  pop_means <- tapply(df$allele_freq, df$pop, mean)
+  SS_pops_total <- sum(table(df$pop) * (pop_means - total_mean)^2)
+  SS_pops_within <- SS_pops_total - SS_groups
+  
+  # Within populations sum of squares (residual)
+  SS_within <- SS_total - SS_pops_total
+  
+  # Degrees of freedom
+  df_total <- nrow(df) - 1
+  df_groups <- length(unique(df$group)) - 1
+  df_pops <- length(unique(df$pop)) - 1
+  df_pops_within <- df_pops - df_groups
+  df_within <- df_total - df_pops
+  
+  # Calculate mean squares
+  MS_groups <- ifelse(df_groups > 0, SS_groups / df_groups, 0)
+  MS_pops_within <- ifelse(df_pops_within > 0, SS_pops_within / df_pops_within, 0)
+  MS_within <- ifelse(df_within > 0, SS_within / df_within, 0)
+  
+  # Calculate variance components
+  n <- mean(table(df$pop))
+  n0 <- (nrow(df) - sum(table(df$pop)^2)/nrow(df)) / (length(unique(df$pop)) - 1)
+  
+  sigma2_within <- MS_within
+  sigma2_pops <- ifelse(n > 0, (MS_pops_within - MS_within) / n, 0)
+  sigma2_groups <- ifelse(n * length(unique(df$pop)) / length(unique(df$group)) > 0, 
+                          (MS_groups - MS_pops_within) / (n * length(unique(df$pop)) / length(unique(df$group))), 
+                          0)
+  
+  # Ensure non-negative variances
+  sigma2_pops <- max(0, sigma2_pops)
+  sigma2_groups <- max(0, sigma2_groups)
+  
+  # Total variance
+  sigma2_total <- sigma2_groups + sigma2_pops + sigma2_within
+  
+  # Calculate Phi statistics
+  Phi_CT <- ifelse(sigma2_total > 0, sigma2_groups / sigma2_total, 0)
+  Phi_SC <- ifelse((sigma2_pops + sigma2_within) > 0, sigma2_pops / (sigma2_pops + sigma2_within), 0)
+  Phi_ST <- ifelse(sigma2_total > 0, (sigma2_groups + sigma2_pops) / sigma2_total, 0)
+  
+  # Prepare results
+  varcomp <- c(sigma2_groups, sigma2_pops, sigma2_within)
+  names(varcomp) <- c("Among groups", "Among pops within groups", "Within pops")
+  
+  statphi <- c(Phi_CT, Phi_SC, Phi_ST)
+  names(statphi) <- c("PhiCT", "PhiSC", "PhiST")
+  
+  return(list(
+    varcomp = varcomp,
+    statphi = statphi,
+    groups = groups,
+    df = df  # Return the processed data for debugging
+  ))
+}
+
+# Replace the calculate_pairwise_phi function with this new version
+calculate_pairwise_phi <- function(genotypes) {
+  pops <- unique(genotypes$pop)
+  n_pops <- length(pops)
+  phi_matrix <- matrix(NA, nrow = n_pops, ncol = n_pops)
+  diag(phi_matrix) <- 0
+  
+  for (i in 1:(n_pops-1)) {
+    for (j in (i+1):n_pops) {
+      sub_geno <- genotypes[genotypes$pop %in% c(pops[i], pops[j]), ]
+      
+      if (nrow(sub_geno) < 2) next
+      
+      # Create data frame
+      df <- data.frame(
+        pop = as.factor(sub_geno$pop),
+        allele_freq = (sub_geno$a1 + sub_geno$a2) / 2
+      )
+      
+      # Calculate total mean
+      total_mean <- mean(df$allele_freq)
+      
+      # Calculate SS_total
+      SS_total <- sum((df$allele_freq - total_mean)^2)
+      
+      # Calculate SS_within (sum of squares within populations)
+      pop_means <- tapply(df$allele_freq, df$pop, mean)
+      n_per_pop <- table(df$pop)
+      SS_within <- sum(tapply(df$allele_freq, df$pop, function(x) sum((x - mean(x))^2)))
+      
+      # Calculate SS_among (between populations)
+      SS_among <- SS_total - SS_within
+      
+      # Calculate variance components
+      n0 <- (nrow(df) - sum(n_per_pop^2)/nrow(df)) / (length(unique(df$pop)) - 1)
+      sigma2_within <- SS_within / (nrow(df) - length(unique(df$pop)))
+      sigma2_among <- (SS_among / (length(unique(df$pop)) - 1) - sigma2_within) / n0
+      
+      # Ensure non-negative variance
+      sigma2_among <- max(0, sigma2_among)
+      
+      # Calculate Phi_ST
+      phi <- sigma2_among / (sigma2_among + sigma2_within)
+      
+      phi_matrix[i,j] <- phi_matrix[j,i] <- phi
+    }
+  }
+  
+  colnames(phi_matrix) <- rownames(phi_matrix) <- paste("Pop", pops)
+  return(phi_matrix)
+}
+
+server <- function(input, output) {
+  
+  output$formulas <- renderUI({
+    withMathJax(
+      h3("Selection Models"),
+      h4("Directional Selection"),
+      helpText("Fitness values:"),
+      helpText("$$\\begin{cases}
+               w_{11} = 1 + s \\\\
+               w_{12} = 1 + hs \\\\
+               w_{22} = 1
+               \\end{cases}$$"),
+      helpText("where \\(s\\) is selection strength and \\(h\\) is dominance coefficient"),
+      
+      h4("Heterozygote Advantage (Overdominance)"),
+      helpText("$$\\begin{cases}
+               w_{11} = 1 - s_1 \\\\
+               w_{12} = 1 \\\\
+               w_{22} = 1 - s_2
+               \\end{cases}$$"),
+      
+      h4("Homozygote Advantage"),
+      helpText("$$\\begin{cases}
+               w_{11} = 1 + s \\\\
+               w_{12} = 1 \\\\
+               w_{22} = 1 + s
+               \\end{cases}$$"),
+      
+      h3("Weir-Cockerham Fst Estimation"),
+      helpText("Components of variance:"),
+      helpText("$$\\sigma_a^2 = \\frac{MSP - MSG}{2n_c}$$"),
+      helpText("$$\\sigma_b^2 = \\frac{MSG}{2}$$"),
+      helpText("where:"),
+      helpText("\\(MSP\\) is mean square between populations"),
+      helpText("\\(MSG\\) is mean square within populations"),
+      helpText("\\(n_c\\) is effective population size"),
+      
+      helpText("Fst is then calculated as:"),
+      helpText("$$F_{ST} = \\frac{\\sigma_a^2}{\\sigma_a^2 + \\sigma_b^2}$$"),
+      
+      h3("AMOVA (Analysis of Molecular Variance)"),
+      helpText("Hierarchical variance decomposition:"),
+      helpText("$$\\sigma^2_{Total} = \\sigma^2_{Among\\ Groups} + \\sigma^2_{Among\\ Pops/Group} + \\sigma^2_{Within\\ Pops}$$"),
+      helpText("Phi statistics:"),
+      helpText("$$\\Phi_{CT} = \\frac{\\sigma^2_{Among\\ Groups}}{\\sigma^2_{Total}}$$"),
+      helpText("$$\\Phi_{SC} = \\frac{\\sigma^2_{Among\\ Pops/Group}}{\\sigma^2_{Among\\ Pops/Group} + \\sigma^2_{Within\\ Pops}}$$"),
+      helpText("$$\\Phi_{ST} = \\frac{\\sigma^2_{Among\\ Groups} + \\sigma^2_{Among\\ Pops/Group}}{\\sigma^2_{Total}}$$"),
+      
+      h3("Population Size Changes"),
+      helpText("Bottleneck effects can be modeled by specifying population sizes for each generation"),
+      helpText("Genetic drift is stronger in smaller populations:"),
+      helpText("$$Var(\\Delta p) = \\frac{p(1-p)}{2N}$$"),
+      
+      h3("Migration Models"),
+      h4("Island Model"),
+      helpText("Each population exchanges migrants at rate \\(m\\) with all other populations"),
+      
+      h4("Stepping Stone Model"),
+      helpText("Each population exchanges migrants only with adjacent populations"),
+      
+      h3("Mutation"),
+      helpText("Asymmetric mutation rates:"),
+      helpText("$$A1 \\xrightarrow{\\mu_{12}} A2$$"),
+      helpText("$$A2 \\xrightarrow{\\mu_{21}} A1$$")
+    )
+  })
+  
+  parse_init_freqs <- reactive({
+    req(input$init_freqs)
+    freqs <- as.numeric(trimws(unlist(strsplit(input$init_freqs, ","))))
+    
+    if (any(is.na(freqs))) {
+      showNotification("Invalid frequency values - using defaults", type = "warning")
+      return(rep(0.5, input$num_pops))
+    }
+    
+    if (length(freqs) < input$num_pops) {
+      showNotification("Not enough frequencies provided - recycling values", type = "warning")
+      freqs <- rep(freqs, length.out = input$num_pops)
+    } else if (length(freqs) > input$num_pops) {
+      showNotification("Too many frequencies provided - using first N", type = "warning")
+      freqs <- freqs[1:input$num_pops]
+    }
+    
+    freqs <- pmin(pmax(freqs, 0), 1)
+    freqs
+  })
+  
+  parse_pop_sizes <- reactive({
+    req(input$pop_sizes_over_time)
+    pop_sizes_text <- trimws(unlist(strsplit(input$pop_sizes_over_time, ";")))
+    
+    pop_sizes_list <- lapply(pop_sizes_text, function(x) {
+      sizes <- as.numeric(trimws(unlist(strsplit(x, ","))))
+      if (any(is.na(sizes)) | any(sizes < 1)) {
+        showNotification("Invalid population size values - using defaults", type = "warning")
+        return(rep(input$pop_size, input$num_gens + 1))
+      }
+      sizes
+    })
+    
+    # Ensure we have the right number of populations
+    if (length(pop_sizes_list) < input$num_pops) {
+      showNotification("Not enough population size vectors provided - recycling values", type = "warning")
+      pop_sizes_list <- rep(pop_sizes_list, length.out = input$num_pops)
+    } else if (length(pop_sizes_list) > input$num_pops) {
+      showNotification("Too many population size vectors provided - using first N", type = "warning")
+      pop_sizes_list <- pop_sizes_list[1:input$num_pops]
+    }
+    
+    # Ensure each population has sizes for all generations
+    pop_sizes_list <- lapply(pop_sizes_list, function(sizes) {
+      if (length(sizes) < input$num_gens + 1) {
+        rep(sizes, length.out = input$num_gens + 1)
+      } else {
+        sizes[1:(input$num_gens + 1)]
+      }
+    })
+    
+    pop_sizes_list
+  })
+  
+  generate_initial_pop <- function(pop_size, init_freq) {
+    data.frame(
+      ind = 1:pop_size,
+      gen = 0,
+      a1 = rbinom(pop_size, 1, init_freq),
+      a2 = rbinom(pop_size, 1, init_freq),
+      parent1 = NA,
+      parent2 = NA
+    )
+  }
+  
+  sim_results <- eventReactive(input$run_sim, {
+    req(input$num_pops, input$pop_size, input$num_gens)
+    
+    init_freqs <- parse_init_freqs()
+    pop_sizes_list <- parse_pop_sizes()
+    
+    # Initialize populations with generation-specific sizes
+    pops <- lapply(1:input$num_pops, function(i) {
+      list(cbind(pop = i, generate_initial_pop(pop_sizes_list[[i]][1], init_freqs[i])))
+    })
+    
+    # Store results
+    freq_history <- list()
+    het_history <- list()
+    size_history <- list()
+    fst_history <- list()
+    
+    # Record initial state
+    for (p in 1:input$num_pops) {
+      init_freq <- mean(c(pops[[p]][[1]]$a1, pops[[p]][[1]]$a2))
+      freq_history[[paste0("pop", p, "_gen0")]] <- data.frame(
+        pop = p, gen = 0, freq = init_freq, init_freq = init_freqs[p]
+      )
+      het <- mean(pops[[p]][[1]]$a1 != pops[[p]][[1]]$a2)
+      het_history[[paste0("pop", p, "_gen0")]] <- data.frame(
+        pop = p, gen = 0, het = het, expected_het = 2 * init_freqs[p] * (1 - init_freqs[p])
+      )
+      size_history[[paste0("pop", p, "_gen0")]] <- data.frame(
+        pop = p, gen = 0, size = pop_sizes_list[[p]][1]
+      )
+    }
+    
+    # Simulation loop
+    for (g in 1:input$num_gens) {
+      for (p in 1:input$num_pops) {
+        current_pop <- pops[[p]][[g]]
+        current_size <- nrow(current_pop)
+        next_size <- pop_sizes_list[[p]][g+1]
+        
+        # Apply selection
+        fitness <- rep(1, current_size)
+        if (input$selection_model == "Directional") {
+          fitness <- ifelse(current_pop$a1 + current_pop$a2 == 2, input$w11,
+                            ifelse(current_pop$a1 + current_pop$a2 == 1, input$w12, input$w22))
+        } else if (input$selection_model == "Heterozygote Advantage") {
+          fitness <- ifelse(current_pop$a1 + current_pop$a2 == 2, input$w11_het,
+                            ifelse(current_pop$a1 + current_pop$a2 == 1, input$w12_het, input$w22_het))
+        } else if (input$selection_model == "Homozygote Advantage") {
+          fitness <- ifelse(current_pop$a1 + current_pop$a2 == 2, input$w11_hom,
+                            ifelse(current_pop$a1 + current_pop$a2 == 1, input$w12_hom, input$w22_hom))
+        }
+        
+        # Create next generation with variable size
+        probs <- fitness / sum(fitness)
+        parents1 <- sample(1:current_size, next_size, replace = TRUE, prob = probs)
+        parents2 <- sample(1:current_size, next_size, replace = TRUE, prob = probs)
+        
+        new_pop <- data.frame(
+          pop = p,
+          ind = 1:next_size,
+          gen = g,
+          a1 = ifelse(runif(next_size) < 0.5, current_pop$a1[parents1], current_pop$a2[parents1]),
+          a2 = ifelse(runif(next_size) < 0.5, current_pop$a1[parents2], current_pop$a2[parents2]),
+          parent1 = parents1,
+          parent2 = parents2
+        )
+        
+        # Apply mutation
+        new_pop$a1[(new_pop$a1 == 1) & (runif(next_size) < input$mutation_A1_to_A2)] <- 0
+        new_pop$a2[(new_pop$a2 == 0) & (runif(next_size) < input$mutation_A2_to_A1)] <- 1
+        
+        pops[[p]][[g+1]] <- new_pop
+        
+        # Record frequencies
+        freq <- mean(c(new_pop$a1, new_pop$a2))
+        freq_history[[paste0("pop", p, "_gen", g)]] <- data.frame(
+          pop = p, gen = g, freq = freq, init_freq = init_freqs[p]
+        )
+        
+        # Record heterozygosity
+        het <- mean(new_pop$a1 != new_pop$a2)
+        het_history[[paste0("pop", p, "_gen", g)]] <- data.frame(
+          pop = p, gen = g, het = het, expected_het = 2 * init_freqs[p] * (1 - init_freqs[p])
+        )
+        
+        # Record population size
+        size_history[[paste0("pop", p, "_gen", g)]] <- data.frame(
+          pop = p, gen = g, size = next_size
+        )
+      }
+      
+      # Migration (modified to handle variable population sizes)
+      if (input$migration_model != "None" && input$migration_rate > 0) {
+        for (p in 1:input$num_pops) {
+          current_size <- nrow(pops[[p]][[g+1]])
+          migrants <- round(current_size * input$migration_rate)
+          
+          if (migrants > 0) {
+            if (input$migration_model == "Island") {
+              # For island model, choose any other population
+              possible_targets <- (1:input$num_pops)[-p]
+              for (target_p in possible_targets) {
+                target_size <- nrow(pops[[target_p]][[g+1]])
+                if (target_size > 0 && current_size > 0) {
+                  migrant_indices <- sample(1:current_size, min(migrants, current_size))
+                  replace_indices <- sample(1:target_size, min(migrants, target_size))
+                  
+                  temp <- pops[[p]][[g+1]][migrant_indices, c("a1", "a2")]
+                  pops[[p]][[g+1]][migrant_indices, c("a1", "a2")] <- 
+                    pops[[target_p]][[g+1]][replace_indices, c("a1", "a2")]
+                  pops[[target_p]][[g+1]][replace_indices, c("a1", "a2")] <- temp
+                }
+              }
+            } else if (input$migration_model == "Stepping Stone") {
+              # For stepping stone, choose adjacent population
+              if (input$num_pops > 1) {
+                target_p <- if (p == 1) 2 else if (p == input$num_pops) input$num_pops - 1 else p + sample(c(-1,1), 1)
+                target_size <- nrow(pops[[target_p]][[g+1]])
+                if (target_size > 0 && current_size > 0) {
+                  migrant_indices <- sample(1:current_size, min(migrants, current_size))
+                  replace_indices <- sample(1:target_size, min(migrants, target_size))
+                  
+                  temp <- pops[[p]][[g+1]][migrant_indices, c("a1", "a2")]
+                  pops[[p]][[g+1]][migrant_indices, c("a1", "a2")] <- 
+                    pops[[target_p]][[g+1]][replace_indices, c("a1", "a2")]
+                  pops[[target_p]][[g+1]][replace_indices, c("a1", "a2")] <- temp
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      # Calculate Fst for this generation if multiple populations
+      if (input$num_pops >= 2 && g > 0) {  # Skip generation 0
+        current_genotypes <- do.call(rbind, lapply(pops, function(pop_list) pop_list[[g+1]]))
+        
+        # Calculate pairwise Weir-Cockerham Fst for this generation
+        fst_matrix_gen <- matrix(0, nrow = input$num_pops, ncol = input$num_pops)
+        for (i in 1:(input$num_pops-1)) {
+          for (j in (i+1):input$num_pops) {
+            fst_matrix_gen[i,j] <- fst_matrix_gen[j,i] <- calculate_pairwise_wc_fst(current_genotypes, i, j)
+          }
+        }
+        
+        # Store Fst values for this generation
+        fst_melted <- melt(fst_matrix_gen)
+        colnames(fst_melted) <- c("Pop1", "Pop2", "Fst")
+        fst_melted$gen <- g
+        fst_history[[g]] <- fst_melted
+      }
+    }
+    
+    # Prepare results
+    genotypes <- do.call(rbind, lapply(pops, function(pop_list) do.call(rbind, pop_list)))
+    frequencies <- do.call(rbind, freq_history)
+    heterozygosity <- do.call(rbind, het_history)
+    sizes_over_time <- do.call(rbind, size_history)
+    fst_over_time <- do.call(rbind, fst_history)  # All Fst values over time
+    
+    # Calculate final Fst matrix and average
+    fst_matrix <- NULL
+    avg_fst <- NULL
+    
+    if (input$num_pops >= 2) {
+      final_genotypes <- genotypes[genotypes$gen == input$num_gens,]
+      
+      fst_matrix <- matrix(0, nrow = input$num_pops, ncol = input$num_pops)
+      for (i in 1:(input$num_pops-1)) {
+        for (j in (i+1):input$num_pops) {
+          fst_matrix[i,j] <- fst_matrix[j,i] <- calculate_pairwise_wc_fst(final_genotypes, i, j)
+        }
+      }
+      avg_fst <- mean(fst_matrix[upper.tri(fst_matrix)])
+    }
+    
+    # Return all results
+    list(
+      genotypes = genotypes,
+      frequencies = frequencies,
+      heterozygosity = heterozygosity,
+      sizes_over_time = sizes_over_time,
+      fst_matrix = fst_matrix,
+      avg_fst = avg_fst,
+      fst_over_time = fst_over_time
+    )
+  })
+  
+  # AMOVA results
+  amova_results <- eventReactive(input$run_amova, {
+    req(input$amova_groups, sim_results())
+    
+    # Parse and validate group assignments
+    groups <- tryCatch({
+      grps <- as.numeric(trimws(unlist(strsplit(input$amova_groups, ","))))
+      if (length(grps) != input$num_pops) {
+        showNotification("Number of groups must match number of populations", type = "error")
+        return(NULL)
+      }
+      grps
+    }, error = function(e) {
+      showNotification("Invalid group format - use comma-separated numbers", type = "error")
+      return(NULL)
+    })
+    
+    if (is.null(groups)) return(NULL)
+    
+    # Get final generation genotypes
+    final_genotypes <- sim_results()$genotypes[sim_results()$genotypes$gen == input$num_gens,]
+    
+    # Check if we have enough data
+    if (nrow(final_genotypes) < 2) {
+      showNotification("Not enough individuals for AMOVA analysis", type = "error")
+      return(NULL)
+    }
+    
+    # Calculate AMOVA
+    amova_result <- calculate_amova(final_genotypes, groups)
+    
+    # Calculate pairwise Phi statistics
+    phi_matrix <- calculate_pairwise_phi(final_genotypes)
+    
+    return(list(
+      amova = amova_result,
+      phi_matrix = phi_matrix,
+      groups = groups
+    ))
+  })
+  
+  # Frequency summary statistics calculation
+  calculate_freq_stats <- reactive({
+    req(sim_results())
+    freqs <- sim_results()$frequencies
+    
+    freqs %>%
+      group_by(pop) %>%
+      summarise(
+        `Initial Frequency` = first(freq),
+        `Final Frequency` = last(freq),
+        `Mean Frequency` = mean(freq, na.rm = TRUE),
+        `SD Frequency` = sd(freq, na.rm = TRUE),
+        `Min Frequency` = min(freq, na.rm = TRUE),
+        `Max Frequency` = max(freq, na.rm = TRUE),
+        .groups = 'drop'
+      ) %>%
+      mutate(across(where(is.numeric), ~round(., 4))) %>%
+      rename(Population = pop)
+  })
+  
+  # Output for genotype plots
+  output$genotype_plots_ui <- renderUI({
+    results <- sim_results()
+    n_pops <- input$num_pops
+    plot_height <- ifelse(n_pops > 2, 400, 800/n_pops)
+    
+    fluidRow(
+      column(6, lapply(1:ceiling(n_pops/2), function(i) {
+        plotOutput(paste0("genotype_plot", i), height = plot_height)
+      })),
+      column(6, lapply((ceiling(n_pops/2)+1):n_pops, function(i) {
+        plotOutput(paste0("genotype_plot", i), height = plot_height)
+      }))
+    )
+  })
+  
+  observe({
+    results <- sim_results()
+    pop_ids <- unique(results$genotypes$pop)
+    
+    lapply(pop_ids, function(p) {
+      output[[paste0("genotype_plot", p)]] <- renderPlot({
+        pop_data <- results$genotypes %>% filter(pop == p)
+        plot_data <- pop_data %>%
+          pivot_longer(cols = c("a1", "a2"), names_to = "allele", values_to = "value") %>%
+          mutate(x_pos = ifelse(allele == "a1", ind - 0.2, ind + 0.2),
+                 color = ifelse(value == 1, "red", "blue"))
+        
+        ggplot(plot_data, aes(x = x_pos, y = gen)) +
+          geom_segment(data = pop_data,
+                       aes(x = ind - 0.2, xend = parent1 - 0.2, y = gen, yend = gen - 1),
+                       alpha = 0.3, color = "gray") +
+          geom_segment(data = pop_data,
+                       aes(x = ind + 0.2, xend = parent2 + 0.2, y = gen, yend = gen - 1),
+                       alpha = 0.3, color = "gray") +
+          geom_point(aes(color = color), size = input$point_size) +
+          scale_color_identity() +
+          labs(title = paste("Population", p, "- Size:", max(pop_data$ind)), 
+               x = "Individual", y = "Generation") +
+          theme_minimal() +
+          theme(legend.position = "none") +
+          scale_y_reverse(breaks = 0:input$num_gens) +
+          expand_limits(y = c(input$num_gens, 0))
+      })
+    })
+  })
+  
+  output$allele_freq_plot <- renderPlot({
+    results <- sim_results()
+    ggplot(results$frequencies, aes(x = gen, y = freq, color = factor(pop))) +
+      geom_line(size = 0.5) +
+      geom_point(size = 1) +
+      geom_hline(aes(yintercept = init_freq, color = factor(pop)), linetype = "dashed", alpha = 0.5) +
+      labs(title = "Allele Frequency Dynamics", x = "Generation", y = "Frequency of A1 Allele", color = "Population") +
+      ylim(0, 1) +
+      theme_minimal() +
+      scale_color_brewer(palette = "Set1")
+  })
+  
+  # Frequency summary table output
+  output$freq_summary_table <- renderTable({
+    stats <- calculate_freq_stats()
+    req(stats)
+    stats
+  }, striped = TRUE, bordered = TRUE, hover = TRUE, digits = 4)
+  
+  # Frequency boxplot output
+  output$freq_boxplot <- renderPlot({
+    req(sim_results())
+    freqs <- sim_results()$frequencies
+    
+    ggplot(freqs, aes(x = factor(pop), y = freq, fill = factor(pop))) +
+      geom_boxplot(alpha = 0.7) +
+      geom_jitter(width = 0.2, alpha = 0.5, size = 2) +
+      scale_fill_brewer(palette = "Set1") +
+      labs(title = "Allele Frequency Distribution by Population",
+           x = "Population",
+           y = "A1 Allele Frequency",
+           fill = "Population") +
+      theme_minimal() +
+      theme(legend.position = "none") +
+      ylim(0, 1)
+  })
+  
+  output$heterozygosity_plot <- renderPlot({
+    results <- sim_results()
+    ggplot(results$heterozygosity, aes(x = gen, y = het, color = factor(pop))) +
+      geom_line(size = 0.5) +
+      geom_point(size = 1) +
+      geom_hline(aes(yintercept = expected_het, color = factor(pop)), linetype = "dashed", alpha = 0.5) +
+      labs(title = "Heterozygosity Over Time", x = "Generation", y = "Heterozygosity", color = "Population") +
+      ylim(0, 0.6) +
+      theme_minimal() +
+      scale_color_brewer(palette = "Set1")
+  })
+  
+  output$pop_size_plot <- renderPlot({
+    results <- sim_results()
+    ggplot(results$sizes_over_time, aes(x = gen, y = size, color = factor(pop))) +
+      geom_line(size = 0.5) +
+      geom_point(size = 1) +
+      labs(title = "Population Sizes Over Generations", x = "Generation", y = "Population Size", color = "Population") +
+      theme_minimal() +
+      scale_color_brewer(palette = "Set1") +
+      scale_y_continuous(limits = c(0, NA))
+  })
+  
+  output$fst_table <- renderTable({
+    results <- sim_results()
+    if (is.null(results$fst_matrix)) return(NULL)
+    
+    fst_df <- as.data.frame(results$fst_matrix)
+    colnames(fst_df) <- paste("Pop", 1:input$num_pops)
+    rownames(fst_df) <- paste("Pop", 1:input$num_pops)
+    fst_df
+  }, rownames = TRUE, digits = 4)
+  
+  output$avg_fst <- renderText({
+    results <- sim_results()
+    if (is.null(results$avg_fst)) return("N/A (requires ≥2 populations)")
+    paste("Average Fst:", round(results$avg_fst, 4))
+  })
+  
+  output$fst_heatmap <- renderPlot({
+    results <- sim_results()
+    if (is.null(results$fst_matrix)) return(NULL)
+    
+    fst_melted <- melt(results$fst_matrix)
+    colnames(fst_melted) <- c("Pop1", "Pop2", "Fst")
+    
+    # Keep only upper triangle (excluding diagonal)
+    fst_melted <- fst_melted[fst_melted$Pop1 < fst_melted$Pop2, ]
+    
+    ggplot(fst_melted, aes(x = factor(Pop1), y = factor(Pop2), fill = Fst)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = round(Fst, 3)), color = "black", size = 4) +
+      scale_fill_gradientn(colors = brewer.pal(9, "YlOrRd"), limits = c(0, 1), na.value = "white") +
+      labs(title = "Pairwise Fst Heatmap (Weir-Cockerham)", x = "Population", y = "Population", fill = "Fst") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.grid = element_blank()) +
+      coord_fixed()
+  })
+  
+  output$fst_dynamics_plot <- renderPlot({
+    results <- sim_results()
+    if (is.null(results$fst_over_time)) return(NULL)
+    
+    # Calculate average Fst per generation
+    avg_fst_over_time <- results$fst_over_time %>%
+      filter(Pop1 < Pop2) %>%  # Only use upper triangle to avoid duplicates
+      group_by(gen) %>%
+      summarize(avg_fst = mean(Fst))
+    
+    # Create plot
+    ggplot() +
+      # Individual population pairs
+      geom_line(data = results$fst_over_time, 
+                aes(x = gen, y = Fst, group = interaction(Pop1, Pop2), 
+                    color = interaction(Pop1, Pop2)), 
+                alpha = 0.6, size = 1) +
+      # Average across all pairs
+      geom_line(data = avg_fst_over_time, 
+                aes(x = gen, y = avg_fst), 
+                color = "black", size = 1.5) +
+      labs(title = "Pairwise Fst Dynamics Across Generations",
+           x = "Generation", y = "Fst Value",
+           color = "Population Pair") +
+      theme_minimal() +
+      scale_color_brewer(palette = "Paired") +
+      ylim(0, 1) +
+      theme(legend.position = "bottom")
+  })
+  
+  output$amova_summary <- renderPrint({
+    results <- amova_results()
+    if (is.null(results)) return("Not enough data for AMOVA analysis")
+    if (is.null(results$amova)) return("Run AMOVA analysis first")
+    
+    cat("Analysis of Molecular Variance (AMOVA)\n")
+    cat("====================================\n")
+    cat("Hierarchical Structure:\n")
+    cat(paste("Groups:", paste(results$groups, collapse = ", "), "\n"))
+    cat("\nVariance Components:\n")
+    print(results$amova$varcomp)
+    cat("\nPhi Statistics:\n")
+    print(results$amova$statphi)
+    
+    # Debugging output
+    cat("\nDebugging Info:\n")
+    cat(paste("Number of populations:", length(unique(results$amova$df$pop)), "\n"))
+    cat(paste("Number of groups:", length(unique(results$amova$df$group)), "\n"))
+    cat(paste("Total individuals:", nrow(results$amova$df), "\n"))
+  })
+  
+  # AMOVA plot rendering
+  output$amova_plot <- renderPlot({
+    results <- amova_results()
+    if (is.null(results)) return(NULL)
+    if (is.null(results$amova)) return(NULL)
+    
+    varcomp <- results$amova$varcomp
+    
+    # Prepare data for plotting
+    df <- data.frame(
+      Level = factor(names(varcomp), 
+                     levels = c("Within pops", "Among pops within groups", "Among groups")),
+      Variance = varcomp,
+      Percent = varcomp / sum(varcomp) * 100
+    )
+    
+    # Remove NA or infinite values
+    df <- df[is.finite(df$Percent), ]
+    
+    ggplot(df, aes(x = Level, y = Percent, fill = Level)) +
+      geom_bar(stat = "identity") +
+      geom_text(aes(label = sprintf("%.1f%%", Percent)), vjust = -0.5) +
+      scale_fill_brewer(palette = "Set2") +
+      labs(title = "AMOVA Variance Components",
+           x = "Hierarchical Level",
+           y = "Percentage of Total Variance") +
+      theme_minimal() +
+      theme(legend.position = "none") +
+      ylim(0, 100)
+  })
+  
+  output$amova_phi_table <- renderTable({
+    results <- amova_results()
+    if (is.null(results$phi_matrix)) return(NULL)
+    
+    phi_df <- as.data.frame(results$phi_matrix)
+    phi_df
+  }, rownames = TRUE, digits = 4)
+  
+  output$phi_heatmap <- renderPlot({
+    results <- amova_results()
+    
+    # Return NULL if no results or no phi matrix
+    if (is.null(results)) return(NULL)
+    if (is.null(results$amova)) return(NULL)
+    if (is.null(results$phi_matrix)) return(NULL)
+    
+    # Convert to data frame for ggplot
+    phi_melted <- reshape2::melt(results$phi_matrix)
+    colnames(phi_melted) <- c("Pop1", "Pop2", "Phi")
+    
+    # Remove diagonal and NA values
+    phi_melted <- phi_melted[phi_melted$Pop1 != phi_melted$Pop2 & !is.na(phi_melted$Phi), ]
+    
+    # Check if we have data to plot
+    if (nrow(phi_melted) == 0) return(NULL)
+    
+    # Create heatmap
+    ggplot(phi_melted, aes(x = Pop1, y = Pop2, fill = Phi)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = round(Phi, 3)), color = "black", size = 4) +
+      scale_fill_gradientn(
+        colors = rev(RColorBrewer::brewer.pal(9, "RdYlBu")),
+        limits = c(0, 1),
+        na.value = "white"
+      ) +
+      labs(
+        title = "Pairwise Phi Statistics Heatmap",
+        x = "Population",
+        y = "Population",
+        fill = "Phi"
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid = element_blank()
+      ) +
+      coord_fixed()
+  })
+}
+
+shinyApp(ui = ui, server = server)
